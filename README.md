@@ -1,1 +1,1 @@
-# Hi, here is a repository of the software I wrote to identify AGN with possible young synchrotron jets. The radio data is proprietary, so unless you are part of the VAST collaboration, this software won't be super helpful
+Hi, here is a repository of the software I wrote to identify AGN with possible young synchrotron jets. The radio data is proprietary, so unless you are part of the VAST collaboration, this software won't be super helpful
