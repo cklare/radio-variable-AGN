@@ -390,14 +390,320 @@ def load_measurements(f, sdss_ids,sdss_wise_ids,wise_ids,survey_str):
     mask = measurements['has_siblings']==False
     measurements = measurements[mask]
 
+    # only keep positive measurements
+    mask = measurements['flux_peak']>0
+    measurements = measurements[mask]
+
     # output an update
-    print(f'dropping {sum(~mask)}/{len(mask)} {survey_str} measurements contaminated with siblings')
+    print(f'dropping {sum(~mask)}/{len(mask)} {survey_str} measurements contaminated with siblings/negative flux')
 
     # now, drop the epochs affected by the holography issue
-    mask = (measurements['time']>np.datetime64('2023-08-12')) & (measurements['time']<np.datetime64('2024-01-05'))
+    mask = (measurements['time']>np.datetime64('2023-08-12')) & (measurements['time']<np.datetime64('2024-01-05')) 
     measurements = measurements[~mask]
     
     return measurements
+
+################################ function 10 #############################
+# insert information we need to calculate scintillation effects
+def get_nu0(lat,long):
+    if abs(lat)>50:
+        nu0 = 8000 # MHz (8 GHZ)
+        return nu0
+    if abs(lat)>30:
+        nu0 = 10000 # MHz
+        return nu0
+    if abs(lat)>15:
+        nu0 = 15000 # MHz
+        return nu0
+    if abs(lat)>10:
+        nu0 = 20000 # MHz
+        return nu0
+    if abs(lat)>5:
+        if long<-25 or long >35:
+            nu0 = 20000 # Mhz
+            return nu0
+    nu0 = 40000 # Mhz
+    return nu0
+
+def calculate_variability_metrics(ids, pmdf, emdf, rmdf):
+    print('starting variability metric calculations')
+    
+
+    var_max = np.zeros((len(ids),),dtype=float)
+    mod_max = np.zeros((len(ids),),dtype=float)
+    #mod_riss = np.zeros((len(ids),),dtype=float)
+
+    # drop all epochs but the ones with the minimum and maximum flux measurements
+    pmdf = pmdf.sort_values(by='flux_peak',ascending=True)
+    pmdf_high = pmdf.drop_duplicates(subset='source',keep='last')
+    pmdf_low = pmdf.drop_duplicates(subset='source',keep='first')
+    emdf = emdf.sort_values(by='flux_peak',ascending=True)
+    emdf_high = emdf.drop_duplicates(subset='source',keep='last')
+    emdf_low = emdf.drop_duplicates(subset='source',keep='first')
+    rmdf = rmdf.sort_values(by='flux_peak',ascending=True)
+    rmdf_high = rmdf.drop_duplicates(subset='source',keep='last')
+    rmdf_low = rmdf.drop_duplicates(subset='source',keep='first')
+
+
+    print('starting loop through sources')
+
+    for i in range(len(ids)):
+        
+        pilot_id = ids['vast_id_pilot'].iloc[i]
+        extragalactic_id = ids['vast_id_extragalactic'].iloc[i]
+        racs_id = ids['vast_id_racs'].iloc[i]
+
+        # get possible high values
+        mask_pilot = pmdf_high['source']==pilot_id
+        mask = pmdf_low['source']==pilot_id
+        
+        mask_extragalactic = emdf_high['source']==extragalactic_id
+        mask_racs = rmdf_high['source']==racs_id
+
+        # first, if the source is in three surveys
+        if sum(mask_pilot)*sum(mask_extragalactic)*sum(mask_racs)>0:
+            
+            high_flux_pilot = pmdf_high[mask_pilot].flux_peak
+            high_flux_extragalactic = emdf_high[mask_extragalactic].flux_peak
+            high_flux_racs = rmdf_high[mask_racs].flux_peak
+    
+            if high_flux_extragalactic.iloc[0]>=high_flux_pilot.iloc[0] and high_flux_extragalactic.iloc[0]>=high_flux_racs.iloc[0]:
+                
+                high_flux = high_flux_extragalactic
+                high_flux_err = emdf_high[mask_extragalactic].flux_peak_err
+
+            if high_flux_pilot.iloc[0] >= high_flux_extragalactic.iloc[0] and high_flux_pilot.iloc[0]>=high_flux_racs.iloc[0]:
+                high_flux = high_flux_pilot
+                high_flux_err = pmdf_high[mask_pilot].flux_peak_err
+
+            if high_flux_racs.iloc[0]>= high_flux_extragalactic.iloc[0] and high_flux_racs.iloc[0]>= high_flux_pilot.iloc[0]:
+                high_flux = high_flux_racs
+                high_flux_err = rmdf_high[mask_racs].flux_peak_err
+
+            # now, look for low flux measurements
+            mask_pilot = pmdf_low['source']==pilot_id
+            mask_extragalactic = emdf_low['source']==extragalactic_id
+            mask_racs = rmdf_low['source']==racs_id
+            if sum(mask_pilot)==0:
+                if sum(mask_extragalactic)==0:
+                    low_flux = rmdf_low[mask_racs].flux_peak
+                    low_flux_err = rmdf_low[mask_racs].flux_peak_err
+                if sum(mask_racs)==0:
+                    low_flux = emdf_low[mask_extragalactic].flux_peak
+                    low_flux_err = emdf_low[mask_extragalactic].flux_peak_err
+                if sum(mask_extragalactic)*sum(mask_racs)>0:
+                    low_flux_racs = rmdf_low[mask_racs].flux_peak
+                    low_flux_extragalactic = emdf_low[mask_extragalactic].flux_peak
+                    if low_flux_racs.iloc[0]<low_flux_extragalactic.iloc[0]:
+                        low_flux = low_flux_racs
+                        low_flux_err = rmdf_low[mask_racs].flux_peak_err
+                    if low_flux_extragalactic.iloc[0]<low_flux_racs.iloc[0]:
+                        low_flux = low_flux_extragalactic
+                        low_flux_err = emdf_low[mask_extragalactic].flux_peak_err
+
+            if sum(mask_pilot)>0 and sum(mask_extragalactic)==0:
+                if sum(mask_racs)==0:
+                    low_flux = pmdf_low[mask_pilot].flux_peak
+                    low_flux_err = pmdf_low[mask_pilot].flux_peak_err
+                if sum(mask_racs)>0:
+                    low_flux_racs = rmdf_low[mask_racs].flux_peak
+                    low_flux_pilot = pmdf_low[mask_pilot].flux_peak
+                    if low_flux_racs.iloc[0]<low_flux_pilot.iloc[0]:
+                        low_flux = low_flux_racs
+                        low_flux_err = rmdf_low[mask_racs].flux_peak_err
+                    if low_flux_pilot.iloc[0]<low_flux_racs.iloc[0]:
+                        low_flux = low_flux_pilot
+                        low_flux_err = pmdf_low[mask_pilot].flux_peak_err
+
+            if sum(mask_pilot)>0 and sum(mask_racs)==0:
+                if sum(mask_extragalactic)==0:
+                    low_flux = pmdf_low[mask_pilot].flux_peak
+                    low_flux_err = pmdf_low[mask_pilot].flux_peak_err
+                if sum(mask_extragalactic)>0:
+                    low_flux_extragalactic = emdf_low[mask_extragalactic].flux_peak
+                    low_flux_pilot = pmdf_low[mask_pilot].flux_peak
+                    if low_flux_extragalactic.iloc[0]<low_flux_pilot.iloc[0]:
+                        low_flux = low_flux_extragalactic
+                        low_flux_err = emdf_low[mask_extragalactic].flux_peak_err
+                    if low_flux_pilot.iloc[0]<low_flux_racs.iloc[0]:
+                        low_flux = low_flux_pilot
+                        low_flux_err = pmdf_low[mask_pilot].flux_peak_err
+
+            low_flux_pilot = pmdf_low[mask_pilot].flux_peak
+            low_flux_extragalactic = emdf_low[mask_extragalactic].flux_peak
+            low_flux_racs = rmdf_low[mask_racs].flux_peak
+
+            if low_flux_extragalactic.iloc[0]<=low_flux_pilot.iloc[0] and low_flux_extragalactic.iloc[0]<=low_flux_racs.iloc[0]:
+                low_flux = low_flux_extragalactic
+                low_flux_err = emdf_low[mask_extragalactic].flux_peak_err
+                
+
+            if low_flux_pilot.iloc[0] <= low_flux_extragalactic.iloc[0] and low_flux_pilot.iloc[0]<=low_flux_racs.iloc[0]:
+                low_flux = low_flux_pilot
+                low_flux_err = pmdf_low[mask_pilot].flux_peak_err
+                
+
+            if low_flux_racs.iloc[0]<= low_flux_extragalactic.iloc[0] and low_flux_racs.iloc[0]<= low_flux_pilot.iloc[0]:
+                low_flux = low_flux_racs
+                low_flux_err = rmdf_low[mask_racs].flux_peak_err
+             
+
+            # calculate the metrics
+            
+            low_flux = low_flux.iloc[0]
+            high_flux = high_flux.iloc[0]
+            
+            low_flux_err = low_flux_err.iloc[0]
+            high_flux_err = high_flux_err.iloc[0]
+            
+            var_max[i]=(high_flux-low_flux)/np.sqrt(high_flux_err**2+low_flux_err**2)
+            mod_max[i] = (high_flux-low_flux)*2/(high_flux+low_flux)
+            continue
+
+        if sum(mask_pilot)>0 and sum(mask_extragalactic)>0:
+            high_flux_pilot = pmdf_high[mask_pilot].flux_peak
+            high_flux_extragalactic = emdf_high[mask_extragalactic].flux_peak
+            if high_flux_pilot.iloc[0]>=high_flux_extragalactic.iloc[0]:
+                high_flux = high_flux_pilot
+                high_flux_err = pmdf_high[mask_pilot].flux_peak_err
+            if high_flux_extragalactic.iloc[0]>=high_flux_pilot.iloc[0]:
+                high_flux = high_flux_extragalactic
+                high_flux_err = emdf_high[mask_extragalactic].flux_peak_err
+
+            mask_pilot = pmdf_low['source']==pilot_id
+            mask_extragalactic = emdf_low['source']==extragalactic_id
+            low_flux_pilot = pmdf_low[mask_pilot].flux_peak
+            low_flux_extragalactic = emdf_low[mask_extragalactic].flux_peak
+
+            if low_flux_pilot.iloc[0]<=low_flux_extragalactic.iloc[0]:
+                low_flux = low_flux_pilot
+                low_flux_err = pmdf_low[mask_pilot].flux_peak_err
+            if low_flux_extragalactic.iloc[0]<=low_flux_pilot.iloc[0]:
+                low_flux = low_flux_extragalactic
+                low_flux_err = emdf_low[mask_extragalactic].flux_peak_err
+
+             # calculate the metrics
+            
+            low_flux = low_flux.iloc[0]
+            high_flux = high_flux.iloc[0]
+            
+            low_flux_err = low_flux_err.iloc[0]
+            high_flux_err = high_flux_err.iloc[0]
+            
+            var_max[i]=(high_flux-low_flux)/np.sqrt(high_flux_err**2+low_flux_err**2)
+            mod_max[i] = (high_flux-low_flux)*2/(high_flux+low_flux)
+            continue
+
+        if sum(mask_pilot)>0 and sum(mask_racs)>0:
+            high_flux_pilot = pmdf_high[mask_pilot].flux_peak
+            high_flux_racs = rmdf_high[mask_racs].flux_peak
+            if high_flux_pilot.iloc[0]>=high_flux_racs.iloc[0]:
+                high_flux = high_flux_pilot
+                high_flux_err = pmdf_high[mask_pilot].flux_peak_err
+            if high_flux_racs.iloc[0]>=high_flux_pilot.iloc[0]:
+                high_flux = high_flux_racs
+                high_flux_err = rmdf_high[mask_racs].flux_peak_err
+
+            mask_pilot = pmdf_low['source']==pilot_id
+            mask_racs = rmdf_low['source']==racs_id
+            low_flux_pilot = pmdf_low[mask_pilot].flux_peak
+            low_flux_racs = rmdf_low[mask_racs].flux_peak
+
+            if low_flux_pilot.iloc[0]<=low_flux_racs.iloc[0]:
+                low_flux = low_flux_pilot
+                low_flux_err = pmdf_low[mask_pilot].flux_peak_err
+            if low_flux_racs.iloc[0]<=low_flux_pilot.iloc[0]:
+                low_flux = low_flux_racs
+                low_flux_err = rmdf_low[mask_racs].flux_peak_err
+
+             # calculate the metrics
+            
+            low_flux = low_flux.iloc[0]
+            high_flux = high_flux.iloc[0]
+            
+            low_flux_err = low_flux_err.iloc[0]
+            high_flux_err = high_flux_err.iloc[0]
+            
+            var_max[i]=(high_flux-low_flux)/np.sqrt(high_flux_err**2+low_flux_err**2)
+            mod_max[i] = (high_flux-low_flux)*2/(high_flux+low_flux)
+            continue
+
+        if sum(mask_racs)>0 and sum(mask_extragalactic)>0:
+            high_flux_racs = rmdf_high[mask_racs].flux_peak
+            high_flux_extragalactic = emdf_high[mask_extragalactic].flux_peak
+            if high_flux_racs.iloc[0]>=high_flux_extragalactic.iloc[0]:
+                high_flux = high_flux_racs
+                high_flux_err = rmdf_high[mask_racs].flux_peak_err
+            if high_flux_extragalactic.iloc[0]>=high_flux_racs.iloc[0]:
+                high_flux = high_flux_extragalactic
+                high_flux_err = emdf_high[mask_extragalactic].flux_peak_err
+
+            mask_racs = rmdf_low['source']==racs_id
+            mask_extragalactic = emdf_low['source']==extragalactic_id
+            low_flux_racs = rmdf_low[mask_racs].flux_peak
+            low_flux_extragalactic = emdf_low[mask_extragalactic].flux_peak
+
+            if low_flux_racs.iloc[0]<=low_flux_extragalactic.iloc[0]:
+                low_flux = low_flux_racs
+                low_flux_err = rmdf_low[mask_racs].flux_peak_err
+            if low_flux_extragalactic.iloc[0]<=low_flux_racs.iloc[0]:
+                low_flux = low_flux_extragalactic
+                low_flux_err = emdf_low[mask_extragalactic].flux_peak_err
+
+             # calculate the metrics
+            
+            low_flux = low_flux.iloc[0]
+            high_flux = high_flux.iloc[0]
+            
+            low_flux_err = low_flux_err.iloc[0]
+            high_flux_err = high_flux_err.iloc[0]
+            
+            var_max[i]=(high_flux-low_flux)/np.sqrt(high_flux_err**2+low_flux_err**2)
+            mod_max[i] = (high_flux-low_flux)*2/(high_flux+low_flux)
+            continue
+
+        if sum(mask_pilot)>0:
+            high_flux = pmdf_high[mask_pilot].flux_peak
+            high_flux_err = pmdf_high[mask_pilot].flux_peak_err
+            mask = pmdf_low['source']==pilot_id
+            low_flux = pmdf_low[mask].flux_peak
+            low_flux_err = pmdf_low[mask].flux_peak_err
+            # calculate the metrics
+            
+            low_flux = low_flux.iloc[0]
+            high_flux = high_flux.iloc[0]
+            
+            low_flux_err = low_flux_err.iloc[0]
+            high_flux_err = high_flux_err.iloc[0]
+            
+            var_max[i]=(high_flux-low_flux)/np.sqrt(high_flux_err**2+low_flux_err**2)
+            mod_max[i] = (high_flux-low_flux)*2/(high_flux+low_flux)
+            continue
+
+        if sum(mask_extragalactic)>0:
+            high_flux = emdf_high[mask_extragalactic].flux_peak
+            high_flux_err = emdf_high[mask_extragalactic].flux_peak_err
+            mask = emdf_low['source']==extragalactic_id
+            low_flux = emdf_low[mask].flux_peak
+            low_flux_err = emdf_low[mask].flux_peak_err
+            # calculate the metrics
+            
+            low_flux = low_flux.iloc[0]
+            high_flux = high_flux.iloc[0]
+            
+            low_flux_err = low_flux_err.iloc[0]
+            high_flux_err = high_flux_err.iloc[0]
+            
+            var_max[i]=(high_flux-low_flux)/np.sqrt(high_flux_err**2+low_flux_err**2)
+            mod_max[i] = (high_flux-low_flux)*2/(high_flux+low_flux)
+            continue
+
+
+    ids = ids.assign(var_max=var_max)
+    ids = ids.assign(mod_max=mod_max)
+    print('done with one agn catalog!')
+
+    return ids
 
 ################################### function #9 ############################
 # select sources based on their light curve morphology. I love to change the criteria obsessively 
@@ -529,27 +835,7 @@ def light_curve_cuts(pdf, edf, rdf, pmdf,emdf,rmdf,ids):
     
     return ids, pdf, edf, rdf
 
-################################ function 10 #############################
-# insert information we need to calculate scintillation effects
-def get_nu0(lat,long):
-    if abs(lat)>50:
-        nu0 = 8000 # MHz (8 GHZ)
-        return nu0
-    if abs(lat)>30:
-        nu0 = 10000 # MHz
-        return nu0
-    if abs(lat)>15:
-        nu0 = 15000 # MHz
-        return nu0
-    if abs(lat)>10:
-        nu0 = 20000 # MHz
-        return nu0
-    if abs(lat)>5:
-        if long<-25 or long >35:
-            nu0 = 20000 # Mhz
-            return nu0
-    nu0 = 40000 # Mhz
-    return nu0
+
     
 
 

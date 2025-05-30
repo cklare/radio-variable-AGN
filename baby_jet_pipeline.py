@@ -11,7 +11,7 @@ import functions as fns
 #f = input("input path to VAST data:")
 # currently, hardcoded
 print('are we using the correct version')
-f = '../all_siblings/straight_from_pipe/'
+f = '../../all_siblings/straight_from_pipe/'
 
 # first, read in the files with the agn and vast source crossmatches and merge
 # there are three separate agn catalogs - AGN identified in SDSS only, AGN identified in WISE only, and SDSS identified in both WISE and SDSS
@@ -45,11 +45,52 @@ mask = wise_racs['vast_id'].isin(wise_ids['vast_id_racs'])
 wise_racs = wise_racs[mask]
 
 
+
+
 # now, get the measurements
 print('loading measurement files...')
 pilot_measurements= fns.load_measurements(f'{f}pilot_measurements',sdss_ids,sdss_wise_ids, wise_ids, 'pilot')
 extragalactic_measurements= fns.load_measurements(f'{f}extragalactic_measurements',sdss_ids,sdss_wise_ids, wise_ids, 'extragalactic')
 racs_measurements= fns.load_measurements(f'{f}racs_measurements',sdss_ids,sdss_wise_ids, wise_ids, 'racs')
+
+# first, I will calculate the scintillation modulation, max two-epoch variability metric, and max two-epoch modulation
+
+sdss_ids = fns.calculate_variability_metrics(sdss_ids,pilot_measurements, extragalactic_measurements, racs_measurements)
+sdss_wise_ids = fns.calculate_variability_metrics(sdss_wise_ids,pilot_measurements, extragalactic_measurements, racs_measurements)
+wise_ids = fns.calculate_variability_metrics(wise_ids,pilot_measurements, extragalactic_measurements, racs_measurements)
+
+var_metrics = pd.concat([sdss_ids['var_max'],sdss_wise_ids['var_max'],wise_ids['var_max']])
+mods = pd.concat([sdss_ids['mod_max'],sdss_wise_ids['mod_max'],wise_ids['mod_max']])
+
+
+if not os.path.isdir('../../distributions/'):
+    os.mkdir('../../distributions/')
+
+plt.figure()
+plt.hist(var_metrics, density=True, color = 'm')
+plt.axvline(x=4.3, linestyle= '--',color = 'k',label='variability threshold')
+#plt.yscale('log')
+plt.xlabel('Variability Metric')
+plt.ylabel('Number of Sources in Sample')
+plt.title('Distribution of max flux epoch vs min flux epoch variability metrics')
+plt.legend()
+plt.savefig('../../distributions/var_metrics.png')
+plt.close()
+
+plt.figure()
+plt.hist(mods, density=True, color = 'purple')
+plt.axvline(x=0.26, linestyle='--',color='k', label='variability threshold')
+max_mod_riss = (888/8000)**(17/30)
+plt.axvline(x=max_mod_riss, linestyle='--',color='r',label='max RISS modulation')
+plt.legend()
+plt.title('Distribution of maximum modulation from median flux')
+plt.xlabel('Modulation')
+plt.ylabel('Number of sources in sample')
+plt.savefig('../../distributions/mod_metrics.png')
+plt.close()
+
+# now, plot the modulations and modulations due to riss
+
 
 # now, perform the light curve morphology cuts 
 print('beginning light curve cuts on sdss sample')
@@ -76,7 +117,7 @@ wise_pilot,wise_extragalactic,wise_racs = fns.scintillation(wise_pilot,wise_extr
 
 # finally, plot the lightcurves
 print('plotting lightcurves')
-plots_f = '../candidate_plots_with_ISS/'
+plots_f = '../../candidate_plots_with_ISS/'
 if not os.path.isdir(plots_f):
     os.mkdir(plots_f)
 fns.plot_light_curves(sdss_pilot, sdss_extragalactic,sdss_racs,pilot_measurements,extragalactic_measurements, racs_measurements,sdss_ids,plots_f)
